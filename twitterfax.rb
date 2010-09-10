@@ -1,20 +1,36 @@
 %w[rubygems twitter json prawn tempfile open-uri].each { |l| require l }
 
-USERNAME     = 'username'
-PASSWORD     = 'p4ssw0rd'
+OAUTH_TOKEN  = "token"
+OAUTH_SECRET = "secret"
+
 DATA_FILE    = File.dirname(__FILE__) + "/twitterfax.json"
 PRINTER_NAME = 'HP_LaserJet_2420' # `lpstat -a`
-
-data_string  = File.read(DATA_FILE) rescue "{}"
-data         = JSON.parse(data_string)
-http_auth    = Twitter::HTTPAuth.new(USERNAME, PASSWORD)
-base         = Twitter::Base.new(http_auth)
-mentions     = base.mentions(data)
 
 IMAGE_SERVICES = {
   %r{(\s*http://yfrog.com/(\w+)\s*)} => "http://yfrog.com/%s.th.jpg",
   %r{(\s*http://twitpic.com/(\w+)\s*)} => "http://twitpic.com/show/thumb/%s",
 }
+
+data_string  = File.read(DATA_FILE) rescue "{}"
+data         = JSON.parse(data_string)
+oauth        = Twitter::OAuth.new(OAUTH_TOKEN, OAUTH_SECRET)
+
+unless data['atoken'] && data['asecret']
+  %x(open #{oauth.request_token.authorize_url})
+  
+  puts "Please check your web browser and enter the PIN Code from Twitter"
+  pin_code = gets.chop
+  oauth.authorize_from_request(oauth.request_token.token, oauth.request_token.secret, pin_code)
+  
+  data.update({
+    'atoken'  => oauth.access_token.token,
+    'asecret' => oauth.access_token.secret,
+  })
+end
+
+oauth.authorize_from_access(data['atoken'], data['asecret'])
+twitter = Twitter::Base.new(oauth)
+mentions = twitter.mentions({ "since_id" => data["since_id"] })
 
 mentions.each do |tweet|
   temp = Tempfile.new('print_tweet_')
@@ -50,7 +66,5 @@ mentions.each do |tweet|
   `lp -d "#{PRINTER_NAME}" #{temp.path}`
 end
 
-if mentions.size > 0
-  data["since_id"] = mentions.first.id
-  File.open(DATA_FILE, 'w') { |f| f.write(data.to_json) }
-end
+data["since_id"] = mentions.first.id if mentions.size > 0
+File.open(DATA_FILE, 'w') { |f| f.write(data.to_json) }
